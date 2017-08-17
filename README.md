@@ -16,14 +16,14 @@ Starmap
 
 xmatch contains a simple function for plotting starmaps with nearby sources. The call 
 
-'''python
+```python
 import matplotlib.pyplot as plt
 import pandas as pd
 import xmatch
 results=pd.read_pickle('results.p')
 fig,ax=fig.subplots(1,figsize=(7,6))
 xmatch.starmap(0,results,ax,cbar=True)
-'''
+```
 
 
 <table border="0">
