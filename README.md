@@ -5,8 +5,7 @@ xmatch creates a cross matched catalog of targets based on the Ecliptic Input Ca
 
 ```python
 import xmatch
-xmatch.match('input.fits',depth=5)
-xmatch.fit()
+xmatch.fit('input.fits',run_match=True)
 ```
 
 Where *input.fits* is a fits file containing RAs, Decs and magnitudes for each target. 

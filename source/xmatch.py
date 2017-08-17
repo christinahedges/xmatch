@@ -32,22 +32,20 @@ def trapezoidal_area(xyz):
 
 
 
-def match(fname='C02_master_merged.fits',depth=5,outfile='results.p',targfile='xmatch.p'):
+def match(RA=None,Dec=None,mag=None,depth=5,outfile='results.p',targfile='epic_1_06jul17.txt'):
 
     '''
     Matches against an EPIC catalog, returns array of matches to a specified depth.
     Please pass a pickled pandas dataframe of the EPIC catalog you want to match against.
     '''
-    h=fits.open(fname)
-    mag=25-2.5*np.log10(h[1].data['Total_flux'])
-    RA,Dec=h[1].data['RA']*u.radian,h[1].data['DEC']*u.radian
-    RA,Dec=RA.to(u.deg),Dec.to(u.deg)
 
-    #Ensure all targets are unique
-    unq=np.unique(RA*Dec,return_index=True)[1]
-    RA,Dec,mag=RA[unq],Dec[unq],mag[unq]
-    
-    targlist=pickle.load(open(targfile,'rb'))
+    targlist=pd.read_csv(targfile,delimiter=',',comment='#')
+
+    targlist=targlist[np.all([targlist.k2_ra>np.min(RA),
+            targlist.k2_ra<np.max(RA),
+            targlist.k2_dec>np.min(Dec),
+            targlist.k2_dec<np.max(Dec)],axis=0)]
+
     EPICcatalog=SkyCoord(targlist.k2_ra*u.deg,targlist.k2_dec*u.deg)
     INPUTcatalog = SkyCoord(ra=RA, dec=Dec)
     
@@ -235,10 +233,14 @@ def calc_prob(pos,results,title=None,plot=True,outfile=None,cap=True):
 
 
 
-def fit(infile='C02_master_merged.fits',catalog='xmatch.p',run_match=False,depth=5,contaminationlim=12,blendlim=2,goodthresh=-6.,badthresh=-7.5):
+def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,contaminationlim=12,blendlim=2,goodthresh=-6.,badthresh=-7.5):
 
     '''
     Fit an input catalog of RAs, Decs and Mags.
+
+    run_match :         Whether to run the matching algorithm. Takes about 5 minutes and there is no need to repeat it.
+
+    depth :             How many neighbors to match up to
 
     contaminationlim :  the distance limit where a source is no longer considered contaminated.
                         Set to 12 arcseconds (3 pixels) by default. 
@@ -249,12 +251,25 @@ def fit(infile='C02_master_merged.fits',catalog='xmatch.p',run_match=False,depth
 
     accept:             The distance up to which all sources should be accepted as the correct source. 
                         Set to 6 arcseconds (1.5 pixels) by default. 
+
+    goodthresh:         The probability cut off above which to accept all matchers
+
+    badthresh:          The probability cut off below which all matches should be rejected
     '''
 
 
     if run_match==True:
+        h=fits.open(infile)
+        mag=25-2.5*np.log10(h[1].data['Total_flux'])
+        RA,Dec=h[1].data['RA']*u.radian,h[1].data['DEC']*u.radian
+        RA,Dec=RA.to(u.deg),Dec.to(u.deg)
+
+        #Ensure all targets are unique
+        unq=np.unique(RA*Dec,return_index=True)[1]
+        RA,Dec,mag=RA[unq],Dec[unq],mag[unq]
+        
     	print 'Matching against {}'.format(catalog)
-    	match(fname=infile,depth=depth,outfile='results.p',targfile=catalog)
+    	match(RA,Dec,mag,depth=depth,outfile='results.p',targfile=catalog)
 
     results=pd.read_pickle('results.p')
     results['PROB']=0
