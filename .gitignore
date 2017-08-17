@@ -1,7 +1,0 @@
-*.txt
-*.p
-*.fits
-*.csv
-*.ipynb*
-.gitignore
-*data/*
