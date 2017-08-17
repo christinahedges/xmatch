@@ -86,7 +86,7 @@ def match(fname='C02_master_merged.fits',depth=5,outfile='results.p',targfile='x
 
 
 
-def starmap(i,results,frame,depth=5):
+def starmap(i,results,frame,depth=5,cbar=False):
 
     '''
     Plots a star map for a given source to check how close the nearest match is.
@@ -97,125 +97,145 @@ def starmap(i,results,frame,depth=5):
             axes.add_patch(circle)
         return True
     
-
-    cols,ras,decs=[],[],[]
+    frame.set_facecolor('black')
+    cols,ras,decs,ids=[],[],[],[]
     for n in np.arange(depth)+1:
-        ra,dec,col,flag=results.loc[i,'EPICRA_{}'.format(n)],results.loc[i,'EPICDec_{}'.format(n)],results.loc[i,'EPICdKpMag_{}'.format(n)],results.loc[i,'KepFlag_{}'.format(n)]
+        ra,dec,col,flag,idx=results.loc[i,'EPICRA_{}'.format(n)],results.loc[i,'EPICDec_{}'.format(n)],results.loc[i,'EPICKpMag_{}'.format(n)],results.loc[i,'KepFlag_{}'.format(n)],results.loc[i,'EPICID_{}'.format(n)]
         cols.append(np.abs(col))
         ras.append(ra)
         decs.append(dec)
+        ids.append(idx)
         if flag=='gri':
             color='lime'
         if flag!='gri':
-            color='black'
+            color='white'
         
         #plt.text(ra+0.001,dec+0.001,'{}'.format(n),fontsize=15)
-        circle_scatter(frame, [ra], [dec], radius=(4*u.arcsec).to(u.deg).value, alpha=0.3, color=color,zorder=-5)
+        circle_scatter(frame, [ra], [dec], radius=(4*u.arcsec).to(u.deg).value, alpha=0.3, facecolor=None,edgecolor=color,zorder=20,lw=2)
     n=results.loc[i,'Nth_Neighbour']-1
+    sc=plt.scatter(ras,decs,c=cols,cmap=plt.get_cmap('Greys'),vmin=5,vmax=20,s=50)
+    if cbar==True:
+       cbar=plt.colorbar()
+       cbar.set_label('Magnitude')
     if n>-1:
-        circle_scatter(frame, [ras[n]], [decs[n]], radius=(8*u.arcsec).to(u.deg).value, alpha=0.5, facecolor='white',edgecolor='C3',zorder=-1,ls='--')
-    
-    sc=frame.scatter(ras,decs,c=cols,vmin=0,vmax=5)
+        plt.scatter(ras[n],decs[n],marker='o',edgecolor='C3',s=3000,facecolor='black',zorder=-10,lw=2)
+  
+
+   
     circle_scatter(frame, [results.loc[i,'RA']], [results.loc[i,'Dec']], radius=(1.2*u.arcsec).to(u.deg).value, alpha=1, color='C3',zorder=1)
-    frame.set_xlabel('Dec')
-    frame.set_ylabel('RA')
+    
+    #frame.set_xlabel('Dec')
+    #frame.set_ylabel('RA')
+    frame.set_xticks([])
+    frame.set_yticks([])
+
     frame.set_title('Star {}'.format(i))
+
+    for j,k,r,d in zip(xrange(depth),ids,ras,decs):
+        if j==n:
+            continue
+        if len(np.where(results.EPICID==k)[0])==1:
+            plt.scatter(r,d,marker='o',edgecolor='black',s=1000,facecolor='black',zorder=10,lw=2)
     return 
 
 
 
-def nonsym_model(x,ppos,pneg,zeropoint):
-
-    '''
-    makes a non symmetric lorentzian model
-    '''
-    if len(np.shape(x))>1:
-        xs=x.ravel()
-    else:
-        if isinstance(x,float)==True:
-            xs=[x]
-        else:
-            xs=np.copy(x)
-    result=[]
-    for i in xs:
-        if i-zeropoint<0.:
-            result.append(pneg(i-zeropoint))
-        else:
-            result.append(ppos(i-zeropoint))
-
-    if len(np.shape(x))>1:
-        return np.reshape(result,(np.shape(x)[0],np.shape(x)[1]))
-    else:
-        if isinstance(x,float)==True:
-            return result[0]
-        else:
-            return result
 
 
-
-
-def prob(dist,dmag,plot=False):
-
-    '''
-    Calculates the probability model for distance and delta mag.
-    Both are based on Lorentzian models.
-    '''
-    fit_p = fitting.LevMarLSQFitter()
-    
-    #Fit the change in magnitude
-    h=np.histogram(dmag,200)
-    x,y=(h[1][:-1]+h[1][1]-h[1][1]),h[0]
-    zeropoint=fit_p(models.Gaussian1D(),x, y).mean.value
-    x-=zeropoint
-
-
-    p_init = models.Lorentz1D(x_0=0)
-    p_init.x_0.fixed=True
-
-    ok=np.where(x>=0)
-    
-    ppos = fit_p(p_init, x[ok], y[ok])
-
-    ok=np.where(x<0)
-    fit_p = fitting.LevMarLSQFitter()
-    pneg = fit_p(p_init, x[ok], y[ok])
-
-
-    #Fit the distance
-    h=np.histogram(dist,200)
-    x,y=(h[1][:-1]+h[1][1]-h[1][1]),h[0]
-
-
-    p_init = models.Lorentz1D(x_0=0)
-    p_init.x_0.fixed=True
-
-    ok=np.where(x>=0.1)
-    fit_p = fitting.LevMarLSQFitter()
-    pdist = fit_p(p_init, x[ok], y[ok])
-
-    X,Y=np.meshgrid(np.linspace(0,10,200),np.linspace(-5,5,200))
-    surf=pdist(X)*nonsym_model(Y,ppos,pneg,zeropoint)
-    norm=trapezoidal_area(np.asarray([X.ravel(),Y.ravel(),surf.ravel()]).T)
-    surf/=norm
-        
+def calc_prob(pos,results,title=None,plot=True,outfile=None,cap=True):
     if plot==True:
-        #Plot up the surface and show it
-        plt.figure()
-        plt.scatter(dist,dmag,c='C0',s=0.1)
-        plt.ylim(-2,2)
-        plt.contour(X,Y,surf,colors='C1',levels=np.linspace(0,np.max(surf),20))
-        plt.xlim(0.,5)
-        plt.xlabel('Distance from Nearest Source (arcseconds)')
-        plt.ylabel('Difference in Magnitude')
-    return pdist,ppos,pneg,zeropoint,norm
+        fig=plt.figure(figsize=(8,7))
+        ax1=plt.subplot2grid((6,6),(0,1),colspan=5,rowspan=5)
+        H=plt.hist2d(np.log10(results.EPICd2d_1[pos]),np.abs(results.EPICKpMag_1[pos]), bins=40,cmap=plt.get_cmap('Blues'),vmin=10)
+        X,Y=np.meshgrid(H[1][:-1]+np.median(H[1][1:]-H[1][0:-1]),H[2][:-1]+np.median(H[2][1:]-H[2][0:-1]))
+
+        cbar=plt.colorbar()
+        cbar.set_label('Frequency')
+        plt.ylim(6,19)
+        plt.xlim(-1.5,1.5)
+        plt.xticks([])
+        plt.yticks([])
+        if title!=None:
+            plt.title(title)
+    else:   
+        H=np.histogram2d(np.log10(results.EPICd2d_1[pos]),np.abs(results.EPICKpMag_1[pos]), bins=40)
+        X,Y=np.meshgrid(H[1][:-1]+np.median(H[1][1:]-H[1][0:-1]),H[2][:-1]+np.median(H[2][1:]-H[2][0:-1]))
+
+    p_init = models.Gaussian2D(x_mean=-0.5,y_mean=12)
+
+    fit_p = fitting.LevMarLSQFitter()
+    p=fit_p(p_init,X,Y,H[0].T)
+    
+    h=np.histogram(np.log10(results.EPICd2d_1[pos]),40,normed=True)
+    x=(np.arange(len(h[0])))*(np.median(h[1][1:]-h[1][0:-1]))+h[1][0]
+    
+    if plot==True:
+        ax1.contour(X,Y,p(X,Y),colors='C3',alpha=0.5)
+        ax2=plt.subplot2grid((6,6),(5,1),colspan=4)
+        plt.plot(x,h[0])
+        model=np.nansum(p(X,Y),axis=0)
+        plt.plot(X[0],np.mean(h[0])*model/np.mean(model))
+        plt.xlim(-1.5,1.5)
+        plt.xlabel('Distance to Nearest Source (arcseconds)')
+
+    h=np.histogram(results.EPICKpMag_1[pos],200,normed=True)
+    x=(np.arange(len(h[0])))*(np.median(h[1][1:]-h[1][0:-1]))+h[1][0]    
+
+    if plot==True:
+        ax3=plt.subplot2grid((6,6),(0,0),rowspan=5)
+        plt.ylim(6,19)
+        plt.plot(h[0],x)
+        model=np.nansum(p(X,Y),axis=1)
+        plt.plot(np.mean(h[0])*model/np.mean(model),Y[:,0])
+        plt.ylabel('Magnitude')
+
+    if cap==True:
+        magcap=x[np.argmax(h[0])]
+
+    
+    
+    mask=np.asarray(np.zeros(np.shape(X)),dtype=bool)
+    mask[:,:-1]=np.asarray([(m[1:]-m[0:-1])>=0 for m in p(X,Y)])
+    x,y=[],[]
+    for i,m in zip(xrange(len(mask)),mask):
+        x.append(X[0][np.where(m!=0)[0][-1]])
+        y.append(Y[:,0][i])
+
+  
+    l=np.polyfit(y,x,1)
+
+    
+
+
+    dists,mags=np.meshgrid(np.linspace(-3,2,40),np.linspace(5,20))
+    prob=[]
+    for d,m in zip(dists.ravel(),mags.ravel()):
+        if cap==True:
+            if m<magcap:
+                m=magcap
+        if d<=m*l[0]+l[1]:
+            prob.append(p(m*l[0]+l[1],m))
+        else:
+            prob.append(p(d,m))
+
+       
+    norm=trapezoidal_area(np.transpose([dists.ravel(),mags.ravel(),prob]))
+    if plot==True:
+        ax1.contour(dists,mags,np.reshape(prob,np.shape(dists)),colors='C1',alpha=0.5)
+        if outfile!=None:
+            plt.savefig(outfile,dpi=150,bbox_inches='tight')
+            plt.close()
+        else:
+            plt.show()
+
+
+    return fig,p,norm,l,magcap
 
 
 
 
 
-
-
-def fit(infile='C02_master_merged.fits',catalog='xmatch.p',run_match=False,depth=5,contaminationlim=12,blendlim=2,accept=6):
+def fit(infile='C02_master_merged.fits',catalog='xmatch.p',run_match=False,depth=5,contaminationlim=12,blendlim=2,goodthresh=-6.,badthresh=-7.5):
 
     '''
     Fit an input catalog of RAs, Decs and Mags.
@@ -239,39 +259,52 @@ def fit(infile='C02_master_merged.fits',catalog='xmatch.p',run_match=False,depth
     results=pd.read_pickle('results.p')
     results['PROB']=0
 
+    ax,gri_model,gri_norm,gri_l,gri_cap=calc_prob(results.KepFlag_1!='none',results,cap=True,title='gri targets',outfile='images/gri_model.png')
+    ax,ngri_model,ngri_norm,ngri_l,ngri_cap=calc_prob((results.KepFlag_1!='gri')&(results.EPICd2d_1<4)&(results.EPICKpMag_1<=18),results,cap=True,title='gri targets',outfile='images/ngri_model.png')
 
-    print 'Modeling distance and magnitude distributions'
-    pos=np.where(results.KepFlag_1=='gri')[0]
-    gri_distmodel,gri_ppos,gri_pneg,gri_zeropoint,gri_norm=prob(results.EPICd2d_1[pos],results.EPICdKpMag_1[pos],plot=True)
-    plt.title('gri model')
-    plt.savefig('images/gri_model.png',dpi=150,bbox_inches='tight')
-    plt.close()
+    
+    def assign_prob(dists,mags,flags,justgri=False):
+        probs=[]
+        if justgri==False:
+            for d,m,f in tqdm(zip(dists.ravel(),mags.ravel(),flags.ravel())):
+                if f=='gri':
+                    if m<gri_cap:
+                        m=gri_cap
+                    if d<=m*gri_l[0]+gri_l[1]:
+                        probs.append(gri_model(m*gri_l[0]+gri_l[1],m)/gri_norm)
+                    else:
+                        probs.append(gri_model(d,m)/gri_norm)
+                if f!='gri':
+                    if m<ngri_cap:
+                        m=ngri_cap
+                    if d<=m*ngri_l[0]+ngri_l[1]:
+                        probs.append(ngri_model(m*ngri_l[0]+ngri_l[1],m)/ngri_norm)
+                    else:
+                        probs.append(ngri_model(d,m)/ngri_norm)   
+            return np.reshape(probs,(np.shape(dists)))
+        else:
+            for d,m,f in tqdm(zip(dists.ravel(),mags.ravel(),flags.ravel())):
+                if m<gri_cap:
+                    m=gri_cap
+                if d<=m*gri_l[0]+gri_l[1]:
+                    probs.append(gri_model(m*gri_l[0]+gri_l[1],m)/gri_norm)
+                else:
+                    probs.append(gri_model(d,m)/gri_norm) 
+            return np.reshape(probs,(np.shape(dists)))
 
-    pos=np.where(results.KepFlag_1!='gri')[0]
-    ngri_distmodel,ngri_ppos,ngri_pneg,ngri_zeropoint,ngri_norm=prob(results.EPICd2d_1[pos],results.EPICdKpMag_1[pos],plot=True)
-    plt.title('ngri model')
-    plt.savefig('images/ngri_model.png',dpi=150,bbox_inches='tight')
-    plt.close()
+
 
     dists=np.zeros((len(results),depth))
-    dmags=np.zeros((len(results),depth))
+    mags=np.zeros((len(results),depth))
     flags=np.chararray((len(results),depth),itemsize=3)
     ids=np.zeros((len(results),depth),dtype=int)
 
     for n in xrange(depth):
         dists[:,n]=np.asarray(results['EPICd2d_{}'.format(n+1)])
-        dmags[:,n]=np.asarray(results['EPICdKpMag_{}'.format(n+1)])
+        mags[:,n]=np.asarray(results['EPICKpMag_{}'.format(n+1)])
         flags[:,n]=np.asarray(results['KepFlag_{}'.format(n+1)])
         ids[:,n]=np.asarray(results['EPICID_{}'.format(n+1)])
-
-    print 'Calculating probability'
-    probs=np.copy(dists)*0.
-    for i,ds,ms,fs in tqdm(zip(xrange(len(dists)),dists,dmags,flags)):
-        for j,d,m,f in zip(xrange(depth),ds,ms,fs):
-            if f=='gri':
-                probs[i,j]=(gri_distmodel(d)*nonsym_model(m,gri_ppos,gri_pneg,gri_zeropoint))/gri_norm
-            if f!='gri':
-                probs[i,j]=(ngri_distmodel(d)*nonsym_model(m,ngri_ppos,ngri_pneg,ngri_zeropoint))/ngri_norm
+    probs=assign_prob(np.log10(dists),mags,flags,justgri=True)
 
 
     results.Nth_Neighbour=np.argmax(probs,axis=1)+1
@@ -289,43 +322,31 @@ def fit(infile='C02_master_merged.fits',catalog='xmatch.p',run_match=False,depth
         d.append(results.loc[i,'EPICKpMag_{}'.format(n)])
     results['EPICKpMag']=np.asarray(d,dtype=float)
 
-
-    plt.scatter(np.log10(dists)[flags=='gri'],dmags[flags=='gri'],c=np.log10(probs)[flags=='gri'],s=-np.log10(probs)[flags=='gri'])
-    plt.xlim(-3,1.5)
-    plt.ylim(-10,10)
-    plt.title('gri targets')
+    plt.scatter(np.log10(dists),mags,c=np.log10(probs),s=-np.log10(probs),vmin=badthresh,vmax=goodthresh)
+    plt.xlim(-3,2)
+    plt.ylim(5,22)
     cbar=plt.colorbar()
     cbar.set_label('Probability')
     plt.xlabel('Distance to Target (log(arcsecond))')
     plt.ylabel('Magnitude Difference')
-    plt.savefig('images/gri.png',dpi=150,bbox_inches='tight')
+    plt.savefig('images/prob.png',dpi=150,bbox_inches='tight')
     plt.close()
 
-    plt.scatter(np.log10(dists)[flags!='gri'],dmags[flags!='gri'],c=np.log10(probs)[flags!='gri'],s=-np.log10(probs)[flags!='gri'])
-    plt.xlim(-3,1.5)
-    plt.ylim(-10,10)
-    plt.title('!gri targets')
-    cbar.set_label('log$_{10]$ Prob')
-    cbar=plt.colorbar()
-    cbar.set_label('Probability')
-    plt.xlabel('Distance to Target (log(arcsecond))')
-    plt.ylabel('Magnitude Difference')
-    plt.savefig('images/ngri.png',dpi=150,bbox_inches='tight')
-    plt.close()
+
 
     pos=results.Xflag=='gri'
-    plt.scatter(np.log10(results.EPICd2d)[pos],np.log10(results.PROB[pos]),s=1,label='gri')
+    plt.scatter(np.log10(results.EPICd2d)[pos],np.log10(results.PROB[pos]),s=0.1,label='gri')
     pos=results.Xflag!='gri'
-    plt.scatter(np.log10(results.EPICd2d)[pos],np.log10(results.PROB[pos]),s=1,label='ngri')
+    plt.scatter(np.log10(results.EPICd2d)[pos],np.log10(results.PROB[pos]),s=0.1,label='ngri')
     plt.xlabel('log10(Distance')
+    plt.ylim(-9,-2)
     plt.ylabel('Probability')
-    plt.axhline(-7,c='black',ls='--')
+    plt.axhline(goodthresh,c='black',ls='--')
     plt.legend()
     plt.savefig('images/distprob.png',dpi=150,bbox_inches='tight')
     plt.close()
 
-    print len(np.where(results.Nth_Neighbour>1)[0]),'targets where Nth Neighbour was suboptimal'
-    #Remove duplicates
+     #Remove duplicates
     mask=np.copy(probs)*0.
     for i,n in enumerate(np.asarray(results.Nth_Neighbour-1)):
         mask[i,n]=1
@@ -399,40 +420,48 @@ def fit(infile='C02_master_merged.fits',catalog='xmatch.p',run_match=False,depth
         
         for i in now[np.any([nxt<blendlim,prv<blendlim],axis=0)]:
             bl[i]=True
-        bl=np.all([bl,bl1<=accept],axis=0)
+        bl=np.all([bl,bl1<=contaminationlim],axis=0)
         blended[:,n-1]=bl
 
      
     blended=np.any(blended,axis=1)
-    blended=np.all([contaminated,blended],axis=0)
-
-
-    accept=6
-    bad=np.where((np.min(dists,axis=1)>=accept)&(blended==False))[0]
-    good=np.where((np.min(dists,axis=1)<=accept)&(blended==False))[0]
-
 
     results['contaminated']=contaminated
     results['blended']=blended
-    results['xmatch']=0
+
+
+    good=np.any([(np.log10(results.PROB)>goodthresh)],axis=0)
+    bad=np.any([(np.log10(results.PROB)<badthresh)],axis=0)
+   
+
+    bad=np.where(bad==True)[0]
+    good=np.where(good==True)[0]
+
+
+    results['xmatch']=0.5
 
     #good
-    results.xmatch[good]=2
+    results.xmatch[good]=1
+    results.xmatch[results.blended]=0.5
 
     #bad
-    results.PROB[bad]=0
-    results.loc[bad,'Nth_Neighbour']=0
-    results.loc[bad,'PROB']=0
-    results.loc[bad,'EPICID']=0
-    results.loc[bad,'EPICd2d']=99
+    results.xmatch[bad]=0
+    results.EPICID[bad]=-99
+
+    #remaining n neighbours must be blends
+#    results.loc[np.where(results.Nth_Neighbour>1)[0],'blended']=True
 
 
     print '------------------------'
+    print len(good),'matched sources (',np.round(100.*float(len(good))/float(len(results)),2),'%)'
+    print len(np.where(results.xmatch==0.5)[0]),'soft matches'
+    print '\t',len(np.where(blended==True)[0]),' of which are blended sources'
+    print len(bad),'missing sources'
+
     print len(np.where(contaminated==True)[0]),'contaminated sources'
-    print len(np.where(blended==True)[0]),'blended sources'
-    print len(bad),'unmatched sources'
-    print len(good),'matched sources'
     print '------------------------'
     results.to_pickle(open('results_probabilities.p','wb'))
+    pickle.dump(probs,open('probs.p','wb'))
+    pickle.dump(mags,open('mags.p','wb'))
     print 'Saved to ','results_probabilities.p'
     return 
