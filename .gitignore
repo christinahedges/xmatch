@@ -4,3 +4,4 @@
 *.csv
 *.ipynb*
 .gitignore
+*data/*
