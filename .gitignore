@@ -1,0 +1,6 @@
+data/
+images/
+*.csv
+*.txt
+*.p
+*.fits

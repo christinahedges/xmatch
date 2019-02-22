@@ -1,6 +1,6 @@
 from astropy.io import fits
 import pandas as pd
-pd.options.mode.chained_assignment = None 
+pd.options.mode.chained_assignment = None
 import matplotlib.pyplot as plt
 import numpy as np
 import astropy.units as u
@@ -10,9 +10,9 @@ from astropy.modeling import models, fitting
 from tqdm import tqdm
 import pickle
 import scipy.spatial
-
-
-
+import dask.dataframe as dd
+from glob import glob
+import time
 
 
 def trapezoidal_area(xyz):
@@ -29,32 +29,52 @@ def trapezoidal_area(xyz):
     return vol.sum()
 
 
+def readepic(epicdir='/Users/ch/K2/data/EPIC/',RAlim=[0,360],Declim=[-90,90],maglim=[0,20]):
+    for i,f in enumerate(glob(epicdir+'*')):
+        if i == 0:
+            df=dd.read_csv(f,delimiter='|',dtype=str)
+        else:
+            df.append(dd.read_csv(f,delimiter='|',dtype=str))
+    df1=df[['k2_ra','k2_dec','id','kp']].astype(float)
+    df1['kepflag']=df['kepflag']
+    df=df1
+    df[(df.k2_ra>RAlim[0]-0.1)&
+        (df.k2_ra<RAlim[1]+0.1)&
+        (df.k2_dec>Declim[0]-0.1)&
+        (df.k2_dec<Declim[1]+0.1)]
+    df=df.drop_duplicates()
+    df=df.reset_index(drop=True)
+    return df.compute()
 
-
-
-def match(RA=None,Dec=None,mag=None,depth=5,outfile='results.p',targfile='epic_1_06jul17.txt'):
+def match(RA=None,Dec=None,mag=None,depth=5,outfile='results.p',epicdir=None,verbose=False):
 
     '''
     Matches against an EPIC catalog, returns array of matches to a specified depth.
     Please pass a pickled pandas dataframe of the EPIC catalog you want to match against.
     '''
-
-    targlist=pd.read_csv(targfile,delimiter=',',comment='#')
-
-    targlist=targlist[np.all([targlist.k2_ra>np.min(RA),
-            targlist.k2_ra<np.max(RA),
-            targlist.k2_dec>np.min(Dec),
-            targlist.k2_dec<np.max(Dec)],axis=0)]
+    if (epicdir is None):
+        print('Please input a directory of EPIC files')
+        return
+    if verbose==True:
+        start=time.time()
+    targlist=readepic(epicdir=epicdir,RAlim=[np.min(RA).value,np.max(RA).value],Declim=[np.min(Dec).value,np.max(Dec).value])
+    if verbose==True:
+        print ('{} Seconds to read EPIC'.format(np.round(time.time()-start)))
+        now=time.time()
 
     EPICcatalog=SkyCoord(targlist.k2_ra*u.deg,targlist.k2_dec*u.deg)
     INPUTcatalog = SkyCoord(ra=RA, dec=Dec)
-    
+    if verbose==True:
+        print ('{} Seconds to create catalogs'.format(np.round(time.time()-now)))
+        now=time.time()
+
     columns=['RA','Dec','InputMag']
     preffixes=['EPICKpMag_','EPICdKpMag_','EPICd2d_','EPICRA_','EPICDec_','EPICID_','KepFlag_']
     for i in np.arange(depth)+1:
         for p in preffixes:
             columns.append('{}{}'.format(p,i))
     [columns.append(i) for i in ['Nth_Neighbour','Xflag','EPICID','KpMag']]
+
 
     results=pd.DataFrame(columns=columns)
 
@@ -63,9 +83,9 @@ def match(RA=None,Dec=None,mag=None,depth=5,outfile='results.p',targfile='epic_1
     results['InputMag']=mag
     results['Nth_Neighbour']=0
     results['Xflag']=-1
-    
+
     for n in np.arange(depth)+1:
-        idx, d2d, d3d = INPUTcatalog.match_to_catalog_sky(EPICcatalog,nthneighbor=n)  
+        idx, d2d, d3d = INPUTcatalog.match_to_catalog_sky(EPICcatalog,nthneighbor=n)
         gri=np.where(np.asarray(targlist.kepflag)[idx]=='gri')[0]
         if n==1:
             zeropoint=np.median(np.asarray(targlist.kp)[idx][gri]-mag[gri])
@@ -81,7 +101,9 @@ def match(RA=None,Dec=None,mag=None,depth=5,outfile='results.p',targfile='epic_1
                          targlist.kepflag[idx]])
         results[nkeys]=ar
     results.to_pickle(outfile)
-
+    if verbose==True:
+        print ('{} Seconds to find neighbours'.format(np.round(time.time()-now)))
+        print ('{} Minutes total'.format((time.time()-start)//60))
 
 
 def starmap(i,results,frame,depth=5,cbar=False):
@@ -94,7 +116,7 @@ def starmap(i,results,frame,depth=5,cbar=False):
             circle = Circle((x,y), radius=radius, **kwargs)
             axes.add_patch(circle)
         return True
-    
+
     frame.set_facecolor('black')
     cols,ras,decs,ids=[],[],[],[]
     for n in np.arange(depth)+1:
@@ -107,7 +129,7 @@ def starmap(i,results,frame,depth=5,cbar=False):
             color='lime'
         if flag!='gri':
             color='white'
-        
+
         #plt.text(ra+0.001,dec+0.001,'{}'.format(n),fontsize=15)
         circle_scatter(frame, [ra], [dec], radius=(4*u.arcsec).to(u.deg).value, alpha=0.3, facecolor=None,edgecolor=color,zorder=20,lw=2)
     n=results.loc[i,'Nth_Neighbour']-1
@@ -117,11 +139,11 @@ def starmap(i,results,frame,depth=5,cbar=False):
        cbar.set_label('Magnitude')
     if n>-1:
         plt.scatter(ras[n],decs[n],marker='o',edgecolor='C3',s=3000,facecolor='black',zorder=-10,lw=2)
-  
 
-   
+
+
     circle_scatter(frame, [results.loc[i,'RA']], [results.loc[i,'Dec']], radius=(1.2*u.arcsec).to(u.deg).value, alpha=1, color='C3',zorder=1)
-    
+
     #frame.set_xlabel('Dec')
     #frame.set_ylabel('RA')
     frame.set_xticks([])
@@ -129,12 +151,12 @@ def starmap(i,results,frame,depth=5,cbar=False):
 
     frame.set_title('Star {}'.format(i))
 
-    for j,k,r,d in zip(xrange(depth),ids,ras,decs):
+    for j,k,r,d in zip(range(depth),ids,ras,decs):
         if j==n:
             continue
         if len(np.where(results.EPICID==k)[0])==1:
             plt.scatter(r,d,marker='o',edgecolor='black',s=1000,facecolor='black',zorder=10,lw=2)
-    return 
+    return
 
 
 
@@ -155,7 +177,7 @@ def calc_prob(pos,results,title=None,plot=True,outfile=None,cap=True):
         plt.yticks([])
         if title!=None:
             plt.title(title)
-    else:   
+    else:
         H=np.histogram2d(np.log10(results.EPICd2d_1[pos]),np.abs(results.EPICKpMag_1[pos]), bins=40)
         X,Y=np.meshgrid(H[1][:-1]+np.median(H[1][1:]-H[1][0:-1]),H[2][:-1]+np.median(H[2][1:]-H[2][0:-1]))
 
@@ -163,10 +185,10 @@ def calc_prob(pos,results,title=None,plot=True,outfile=None,cap=True):
 
     fit_p = fitting.LevMarLSQFitter()
     p=fit_p(p_init,X,Y,H[0].T)
-    
+
     h=np.histogram(np.log10(results.EPICd2d_1[pos]),40,normed=True)
     x=(np.arange(len(h[0])))*(np.median(h[1][1:]-h[1][0:-1]))+h[1][0]
-    
+
     if plot==True:
         ax1.contour(X,Y,p(X,Y),colors='C3',alpha=0.5)
         ax2=plt.subplot2grid((6,6),(5,1),colspan=4)
@@ -177,7 +199,7 @@ def calc_prob(pos,results,title=None,plot=True,outfile=None,cap=True):
         plt.xlabel('Distance to Nearest Source (arcseconds)')
 
     h=np.histogram(results.EPICKpMag_1[pos],200,normed=True)
-    x=(np.arange(len(h[0])))*(np.median(h[1][1:]-h[1][0:-1]))+h[1][0]    
+    x=(np.arange(len(h[0])))*(np.median(h[1][1:]-h[1][0:-1]))+h[1][0]
 
     if plot==True:
         ax3=plt.subplot2grid((6,6),(0,0),rowspan=5)
@@ -190,19 +212,19 @@ def calc_prob(pos,results,title=None,plot=True,outfile=None,cap=True):
     if cap==True:
         magcap=x[np.argmax(h[0])]
 
-    
-    
+
+
     mask=np.asarray(np.zeros(np.shape(X)),dtype=bool)
     mask[:,:-1]=np.asarray([(m[1:]-m[0:-1])>=0 for m in p(X,Y)])
     x,y=[],[]
-    for i,m in zip(xrange(len(mask)),mask):
+    for i,m in zip(range(len(mask)),mask):
         x.append(X[0][np.where(m!=0)[0][-1]])
         y.append(Y[:,0][i])
 
-  
+
     l=np.polyfit(y,x,1)
 
-    
+
 
 
     dists,mags=np.meshgrid(np.linspace(-3,2,40),np.linspace(5,20))
@@ -216,7 +238,7 @@ def calc_prob(pos,results,title=None,plot=True,outfile=None,cap=True):
         else:
             prob.append(p(d,m))
 
-       
+
     norm=trapezoidal_area(np.transpose([dists.ravel(),mags.ravel(),prob]))
     if plot==True:
         ax1.contour(dists,mags,np.reshape(prob,np.shape(dists)),colors='C1',alpha=0.5)
@@ -233,7 +255,7 @@ def calc_prob(pos,results,title=None,plot=True,outfile=None,cap=True):
 
 
 
-def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,contaminationlim=12,blendlim=2,goodthresh=-6.,badthresh=-7.5):
+def fit(infile='../data/C02_master_merged.fits',epicdir='/Users/ch/K2/data/EPIC/',run_match=False,depth=5,contaminationlim=12,blendlim=2,goodthresh=-6.,badthresh=-7.5,verbose=False):
 
     '''
     Fit an input catalog of RAs, Decs and Mags.
@@ -243,14 +265,14 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
     depth :             How many neighbors to match up to
 
     contaminationlim :  the distance limit where a source is no longer considered contaminated.
-                        Set to 12 arcseconds (3 pixels) by default. 
+                        Set to 12 arcseconds (3 pixels) by default.
 
     blendedlim :        The tolerance for a source to be considered blended. Set to 2 arcseconds by
                         default. i.e. Two sources would have to be the same distance away from the target
                         with a tolerance of 2 arcseconds. Set this to a wider tolerance to find more blends.
 
-    accept:             The distance up to which all sources should be accepted as the correct source. 
-                        Set to 6 arcseconds (1.5 pixels) by default. 
+    accept:             The distance up to which all sources should be accepted as the correct source.
+                        Set to 6 arcseconds (1.5 pixels) by default.
 
     goodthresh:         The probability cut off above which to accept all matchers
 
@@ -267,17 +289,15 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
         #Ensure all targets are unique
         unq=np.unique(RA*Dec,return_index=True)[1]
         RA,Dec,mag=RA[unq],Dec[unq],mag[unq]
-        
-    	print 'Matching against {}'.format(catalog)
-    	match(RA,Dec,mag,depth=depth,outfile='results.p',targfile=catalog)
+        match(RA,Dec,mag,depth=depth,outfile='results.p',epicdir=epicdir,verbose=verbose)
 
     results=pd.read_pickle('results.p')
     results['PROB']=0
 
-    ax,gri_model,gri_norm,gri_l,gri_cap=calc_prob(results.KepFlag_1!='none',results,cap=True,title='gri targets',outfile='images/gri_model.png')
-    ax,ngri_model,ngri_norm,ngri_l,ngri_cap=calc_prob((results.KepFlag_1!='gri')&(results.EPICd2d_1<4)&(results.EPICKpMag_1<=18),results,cap=True,title='gri targets',outfile='images/ngri_model.png')
+    ax,gri_model,gri_norm,gri_l,gri_cap=calc_prob(results.KepFlag_1!='none',results,cap=True,title='gri targets',outfile='../images/gri_model.png')
+    ax,ngri_model,ngri_norm,ngri_l,ngri_cap=calc_prob((results.KepFlag_1!='gri')&(results.EPICd2d_1<4)&(results.EPICKpMag_1<=18),results,cap=True,title='gri targets',outfile='../images/ngri_model.png')
 
-    
+
     def assign_prob(dists,mags,flags,justgri=False):
         probs=[]
         if justgri==False:
@@ -295,7 +315,7 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
                     if d<=m*ngri_l[0]+ngri_l[1]:
                         probs.append(ngri_model(m*ngri_l[0]+ngri_l[1],m)/ngri_norm)
                     else:
-                        probs.append(ngri_model(d,m)/ngri_norm)   
+                        probs.append(ngri_model(d,m)/ngri_norm)
             return np.reshape(probs,(np.shape(dists)))
         else:
             for d,m,f in tqdm(zip(dists.ravel(),mags.ravel(),flags.ravel())):
@@ -304,7 +324,7 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
                 if d<=m*gri_l[0]+gri_l[1]:
                     probs.append(gri_model(m*gri_l[0]+gri_l[1],m)/gri_norm)
                 else:
-                    probs.append(gri_model(d,m)/gri_norm) 
+                    probs.append(gri_model(d,m)/gri_norm)
             return np.reshape(probs,(np.shape(dists)))
 
 
@@ -314,7 +334,7 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
     flags=np.chararray((len(results),depth),itemsize=3)
     ids=np.zeros((len(results),depth),dtype=int)
 
-    for n in xrange(depth):
+    for n in range(depth):
         dists[:,n]=np.asarray(results['EPICd2d_{}'.format(n+1)])
         mags[:,n]=np.asarray(results['EPICKpMag_{}'.format(n+1)])
         flags[:,n]=np.asarray(results['KepFlag_{}'.format(n+1)])
@@ -328,12 +348,12 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
     results.EPICID=[f[i] for f,i in zip(ids,np.argmax(probs,axis=1))]
 
     d=[]
-    for n,i in zip(np.asarray(results.Nth_Neighbour),xrange(len(results))):
+    for n,i in zip(np.asarray(results.Nth_Neighbour),range(len(results))):
         d.append(results.loc[i,'EPICd2d_{}'.format(n)])
     results['EPICd2d']=np.asarray(d,dtype=float)
 
     d=[]
-    for n,i in zip(np.asarray(results.Nth_Neighbour),xrange(len(results))):
+    for n,i in zip(np.asarray(results.Nth_Neighbour),range(len(results))):
         d.append(results.loc[i,'EPICKpMag_{}'.format(n)])
     results['EPICKpMag']=np.asarray(d,dtype=float)
 
@@ -344,7 +364,7 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
     cbar.set_label('Probability')
     plt.xlabel('Distance to Target (log(arcsecond))')
     plt.ylabel('Magnitude Difference')
-    plt.savefig('images/prob.png',dpi=150,bbox_inches='tight')
+    plt.savefig('../images/prob.png',dpi=150,bbox_inches='tight')
     plt.close()
 
 
@@ -358,7 +378,7 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
     plt.ylabel('Probability')
     plt.axhline(goodthresh,c='black',ls='--')
     plt.legend()
-    plt.savefig('images/distprob.png',dpi=150,bbox_inches='tight')
+    plt.savefig('../images/distprob.png',dpi=150,bbox_inches='tight')
     plt.close()
 
      #Remove duplicates
@@ -366,13 +386,13 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
     for i,n in enumerate(np.asarray(results.Nth_Neighbour-1)):
         mask[i,n]=1
 
-    print 'Reshuffling duplicates'
+    print('Reshuffling duplicates')
     dupes=np.where(np.asarray([len(np.where(results.EPICID==s)[0]) for s in results.EPICID])>1)[0]
     while len(dupes)!=0:
         for d in tqdm(dupes):
             i=np.asarray(results.loc[d,'EPICID'])
 
-            pos=np.where(np.asarray(results.EPICID)==i)[0]    
+            pos=np.where(np.asarray(results.EPICID)==i)[0]
 
             #Indexes that need to be refound:
             bad=np.asarray(list(set(np.arange(len(pos)))-set([np.argmax(np.max(probs[pos,:],axis=1))])))
@@ -385,7 +405,7 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
                     results.loc[pos[b],'Xflag']='bad'
                     results.loc[pos[b],'EPICID']=0
                     results.loc[pos[b],'EPICd2d']=99
-        
+
                 nth=remain[np.argmax(probs[pos[b],remain])]+1
                 mask[pos[b],nth-1]=1
                 results.PROB[pos[b]]=np.max(probs[pos[b],remain])
@@ -417,7 +437,7 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
     for n in np.arange(depth)+1:
 
         now=np.where(results.Nth_Neighbour==n)[0]
-        
+
         try:
             bl0=results['EPICd2d_{}'.format(n-1)]
         except:
@@ -427,18 +447,18 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
             bl2=results['EPICd2d_{}'.format(n+1)]
         except:
             bl2=np.zeros(len(results))+99
-        
+
         prv=np.asarray(bl1[now]-bl0[now])
         nxt=np.asarray(bl2[now]-bl1[now])
-        
+
         bl=[False]*len(results)
-        
+
         for i in now[np.any([nxt<blendlim,prv<blendlim],axis=0)]:
             bl[i]=True
         bl=np.all([bl,bl1<=contaminationlim],axis=0)
         blended[:,n-1]=bl
 
-     
+
     blended=np.any(blended,axis=1)
 
     results['contaminated']=contaminated
@@ -447,7 +467,7 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
 
     good=np.any([(np.log10(results.PROB)>goodthresh)],axis=0)
     bad=np.any([(np.log10(results.PROB)<badthresh)],axis=0)
-   
+
 
     bad=np.where(bad==True)[0]
     good=np.where(good==True)[0]
@@ -467,16 +487,16 @@ def fit(infile=infile,catalog='epic_1_06jul17.txt',run_match=False,depth=5,conta
 #    results.loc[np.where(results.Nth_Neighbour>1)[0],'blended']=True
 
 
-    print '------------------------'
-    print len(good),'matched sources (',np.round(100.*float(len(good))/float(len(results)),2),'%)'
-    print len(np.where(results.xmatch==0.5)[0]),'soft matches'
-    print '\t',len(np.where(blended==True)[0]),' of which are blended sources'
-    print len(bad),'missing sources'
+    print ('------------------------')
+    print (len(good),'matched sources (',np.round(100.*float(len(good))/float(len(results)),2),'%)')
+    print (len(np.where(results.xmatch==0.5)[0]),'soft matches')
+    print ('\t',len(np.where(blended==True)[0]),' of which are blended sources')
+    print (len(bad),'missing sources')
 
-    print len(np.where(contaminated==True)[0]),'contaminated sources'
-    print '------------------------'
+    print (len(np.where(contaminated==True)[0]),'contaminated sources')
+    print ('------------------------')
     results.to_pickle(open('results_probabilities.p','wb'))
     pickle.dump(probs,open('probs.p','wb'))
     pickle.dump(mags,open('mags.p','wb'))
-    print 'Saved to ','results_probabilities.p'
-    return 
+    print ('Saved to ','results_probabilities.p')
+    return
